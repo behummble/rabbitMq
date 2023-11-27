@@ -24,6 +24,8 @@ func RabbitMq_1C(writter http.ResponseWriter, request *http.Request) {
 		log.Fatal("Method declared in request isn't supported")
 	}
 
+
+
 }
 
 func ListConsumers(writter http.ResponseWriter, request *http.Request) {
@@ -31,7 +33,6 @@ func ListConsumers(writter http.ResponseWriter, request *http.Request) {
 }
 
 func StartHandlers() {
-
 	router := mux.newRouter()
 	router.HandleFunc("/rabbitmq_1C/api/messages", RabbitMq_1C)
 	router.HandleFunc("/rabbitmq_1C/api/listConsumers", ListConsumers)
