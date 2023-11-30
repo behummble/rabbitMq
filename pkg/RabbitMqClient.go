@@ -1,34 +1,35 @@
 package rabbitmqClient
 
 import (
+	"fmt"
 	"log"
-	"context"
+	"os"
 	"strings"
-	"strconv"
+
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type RabbitMqClient struct {
-	connection    *amqp.Connection
-	settings      *ConnectionSettings
-	channel *amqp.channel
+	connection      *amqp.Connection
+	settings        *connectionSettings
+	channel         *amqp.Channel
 	notifyConnClose chan *amqp.Error
 	notifyChanClose chan *amqp.Error
 	notifyConfirm   chan amqp.Confirmation
-	done chan bool
-	consumerCount int
-	messageCount int
-	logger *log.logger
-
+	done            chan bool
+	consumerCount   int
+	messageCount    int
+	logger          *log.Logger
 }
 
 type connectionSettings struct {
-	host     string
-	port     int
-	login    string
-	password string
-	vhost string
-	timeOut int
+	host      string
+	port      string
+	login     string
+	password  string
+	vhost     string
+	timeOut   string
+	queueName string
 }
 
 func putAnError(err error, msg string) {
@@ -37,25 +38,43 @@ func putAnError(err error, msg string) {
 	}
 }
 
-func (RabbitMqClient *RabbitMqClient) Connect() {
-	connect, err := amqp.Dial(RabbitMqClient.settings.Host)
-	putAnError(err, "Failed to connect")
+func (client *RabbitMqClient) Connect() {
 
-	RabbitMqClient.connection = connect
+	connect, err := amqp.Dial(fmt.Sprintf(
+		"%s:%s",
+		client.settings.host,
+		client.settings.port))
+
+	if err != nil {
+		client.logger.Println(err)
+	}
+
+	client.connection = connect
+	client.changeConnection(client.connection)
 }
 
-func (RabbitMqClient *RabbitMqClient) NewClient(headers map[string]string[]) {
+func NewClient(headers map[string][]string) *RabbitMqClient {
 	settings := parseSettings(headers)
+
+	client := RabbitMqClient{
+		settings: settings,
+		logger:   log.New(os.Stdout, "RabbitMq_log", log.LstdFlags),
+		done:     make(chan bool),
+	}
+
+	return &client
 }
 
-func (RabbitMqClient *RabbitMqClient) getMessages() {
+func (client *RabbitMqClient) getMessages() {
 	//TODO :
-	channel, err := RabbitMqClient.connection.channel()
-	if err != nil {putAnError(err, "Failed to open channel")}
-	messages, err := channel
+	channel, err := client.connection.Channel()
+	if err != nil {
+		putAnError(err, "Failed to open channel")
+	}
+	messages, err := channel.Consume()
 }
 
-func (RabbitMqClient *RabbitMqClient) publishMessages() {
+func (client *RabbitMqClient) publishMessages() {
 	//TODO
 }
 
@@ -71,38 +90,58 @@ func (RabbitMqClient *RabbitMqClient) getMessagesSum() int {
 
 }
 
-func parseSettings(headers map[string]string[]) *connectionSettings {
-	var host, vhost, login, password string
-	port := 15642
-	timeOut := 20
+func parseSettings(headers map[string][]string) *connectionSettings {
+	var host, vhost, login, password, queue string
+	port := "5642"
+	timeOut := "20"
 	for k, v := range headers {
-	/*	if strings.EqualFold(k, "host") {
+		/*	if strings.EqualFold(k, "host") {
+				host = v[0]
+			}
+			if strings.EqualFold(k, "login") {
+				login = v[0]
+			}
+			if strings.EqualFold(k, "password") {
+				password = v[0]
+			}
+			if strings.EqualFold(k, "port") {
+				port = strconv.ParseInt(v[0])
+			} */
+		switch strings.ToLower(k) {
+		case "host":
 			host = v[0]
-		}
-		if strings.EqualFold(k, "login") {
+		case "login":
 			login = v[0]
-		}
-		if strings.EqualFold(k, "password") {
+		case "password":
 			password = v[0]
-		}
-		if strings.EqualFold(k, "port") {
-			port = strconv.ParseInt(v[0])
-		} */
-		switch k {
-		case strings.EqualFold(k, "host"):
-			host = v[0]
-		case strings.EqualFold(k, "login"):
-			login = v[0]
-		case strings.EqualFold(k, "password"):
-			password = v[0]
-		case strings.EqualFold(k, "port"):
-			port = strconv.ParseInt(v[0])
-		case strings.EqualFold(k, "host"):
+		case "port":
+			port = v[0]
+		case "vhost":
 			vhost = v[0]
-		case strings.EqualFold(k, "timeOut"):
-			timeOut = v[0]	
+		case "timeOut":
+			timeOut = v[0]
+		case "queue":
+			queue = v[0]
 		}
 	}
 
-	return &connectionSettings{host, port, login, password, vhost, timeOut}
+	return &connectionSettings{host, port, login, password, vhost, timeOut, queue}
+}
+
+func (client *RabbitMqClient) changeConnection(connect *amqp.Connection) {
+	client.notifyConnClose = make(chan *amqp.Error, 1)
+	client.connection.NotifyClose(client.notifyConnClose)
+}
+
+func (client *RabbitMqClient) changeChannel(connect *amqp.Channel) {
+	client.notifyChanClose = make(chan *amqp.Error, 1)
+	client.notifyConfirm = make(chan amqp.Confirmation, 1)
+	client.channel.NotifyClose(client.notifyConnClose)
+	client.channel.NotifyPublish(client.notifyConfirm)
+}
+
+func (client *RabbitMqClient) Close() {
+	close(client.done)
+	client.channel.Close()
+	client.connection.Close()
 }
