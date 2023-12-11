@@ -1,8 +1,13 @@
 package rabbitmqClient
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 
@@ -32,6 +37,17 @@ type connectionSettings struct {
 	queueName string
 }
 
+type responseStruct struct {
+	success bool
+	errors  []errorStruct
+	msgId   string
+}
+
+type errorStruct struct {
+	code        string
+	description string
+}
+
 func putAnError(err error, msg string) {
 	if err != nil {
 		log.Panicf("%s: %s", msg, err)
@@ -54,7 +70,10 @@ func (client *RabbitMqClient) Connect() {
 }
 
 func NewClient(headers map[string][]string) *RabbitMqClient {
-	settings := parseSettings(headers)
+	settings, err := parseSettings(headers)
+	if err != nil {
+
+	}
 
 	client := RabbitMqClient{
 		settings: settings,
@@ -90,23 +109,11 @@ func (RabbitMqClient *RabbitMqClient) getMessagesSum() int {
 
 }
 
-func parseSettings(headers map[string][]string) *connectionSettings {
+func parseSettings(headers map[string][]string) (*connectionSettings, error) {
 	var host, vhost, login, password, queue string
 	port := "5642"
 	timeOut := "20"
 	for k, v := range headers {
-		/*	if strings.EqualFold(k, "host") {
-				host = v[0]
-			}
-			if strings.EqualFold(k, "login") {
-				login = v[0]
-			}
-			if strings.EqualFold(k, "password") {
-				password = v[0]
-			}
-			if strings.EqualFold(k, "port") {
-				port = strconv.ParseInt(v[0])
-			} */
 		switch strings.ToLower(k) {
 		case "host":
 			host = v[0]
@@ -125,7 +132,15 @@ func parseSettings(headers map[string][]string) *connectionSettings {
 		}
 	}
 
-	return &connectionSettings{host, port, login, password, vhost, timeOut, queue}
+	if strings.EqualFold(host, "") ||
+		strings.EqualFold(vhost, "") ||
+		strings.EqualFold(login, "") ||
+		strings.EqualFold(password, "") ||
+		strings.EqualFold(queue, "") {
+		return nil, errors.New("The necessary headers are missing")
+	}
+
+	return &connectionSettings{host, port, login, password, vhost, timeOut, queue}, nil
 }
 
 func (client *RabbitMqClient) changeConnection(connect *amqp.Connection) {
@@ -144,4 +159,23 @@ func (client *RabbitMqClient) Close() {
 	close(client.done)
 	client.channel.Close()
 	client.connection.Close()
+}
+
+func sendResponseRequest(data []responseStruct) {
+	jsonResponse, err := json.Marshal(data)
+	if err != nil {
+		putAnError(err, "ConvertToJsonProblem")
+	}
+	resp, err := http.Post("", "application/json", bytes.NewBuffer(jsonResponse))
+
+	if err != nil {
+		putAnError(err, "ResponseSendingError")
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		answer, _ := io.ReadAll(resp.Body)
+		putAnError(errors.New(string(answer)), "ResponseAnswerError")
+	}
 }
