@@ -48,13 +48,42 @@ type errorStruct struct {
 	description string
 }
 
+type publishMessage {
+	headers string
+	message string
+}
+
 func putAnError(err error, msg string) {
 	if err != nil {
-		log.Panicf("%s: %s", msg, err)
+		log.Println("%s: %s", msg, err)
 	}
 }
 
-func (client *RabbitMqClient) Connect() {
+func NewClient(headers map[string][]string) (*RabbitMqClient, error) {
+	settings, err := parseSettings(headers)
+	if err != nil {
+		putAnError(err, "ParseHeadersError")
+		errors := []errorStruct{{code: "ParseHeadersError", description: err.Error()}}
+		sendResponse(
+			[]responseStruct{
+				{success: false,
+				errors: errors}
+			}
+		)
+		return nil, err
+	}
+
+	client := RabbitMqClient{
+		settings: settings,
+		logger:   log.New(os.Stdout, "RabbitMq_log", log.LstdFlags),
+		done:     make(chan bool),
+	}
+
+	go client.connect()
+	return &client, nil
+}
+
+func (client *RabbitMqClient) connect() {
 
 	connect, err := amqp.Dial(fmt.Sprintf(
 		"%s:%s",
@@ -67,46 +96,7 @@ func (client *RabbitMqClient) Connect() {
 
 	client.connection = connect
 	client.changeConnection(client.connection)
-}
-
-func NewClient(headers map[string][]string) *RabbitMqClient {
-	settings, err := parseSettings(headers)
-	if err != nil {
-
-	}
-
-	client := RabbitMqClient{
-		settings: settings,
-		logger:   log.New(os.Stdout, "RabbitMq_log", log.LstdFlags),
-		done:     make(chan bool),
-	}
-
-	return &client
-}
-
-func (client *RabbitMqClient) getMessages() {
-	//TODO :
-	channel, err := client.connection.Channel()
-	if err != nil {
-		putAnError(err, "Failed to open channel")
-	}
-	messages, err := channel.Consume()
-}
-
-func (client *RabbitMqClient) publishMessages() {
-	//TODO
-}
-
-func declareQueue() {
-
-}
-
-func (RabbitMqClient *RabbitMqClient) getConsumersSum() int {
-
-}
-
-func (RabbitMqClient *RabbitMqClient) getMessagesSum() int {
-
+	_:= client.handleInit()
 }
 
 func parseSettings(headers map[string][]string) (*connectionSettings, error) {
@@ -137,7 +127,7 @@ func parseSettings(headers map[string][]string) (*connectionSettings, error) {
 		strings.EqualFold(login, "") ||
 		strings.EqualFold(password, "") ||
 		strings.EqualFold(queue, "") {
-		return nil, errors.New("The necessary headers are missing")
+		return nil, errors.New("TheNecessaryHeadersAreMissing")
 	}
 
 	return &connectionSettings{host, port, login, password, vhost, timeOut, queue}, nil
@@ -148,11 +138,82 @@ func (client *RabbitMqClient) changeConnection(connect *amqp.Connection) {
 	client.connection.NotifyClose(client.notifyConnClose)
 }
 
-func (client *RabbitMqClient) changeChannel(connect *amqp.Channel) {
+func (client *RabbitMqClient) changeChannel(channel *amqp.Channel) {
+	client.channel = channel
 	client.notifyChanClose = make(chan *amqp.Error, 1)
 	client.notifyConfirm = make(chan amqp.Confirmation, 1)
 	client.channel.NotifyClose(client.notifyConnClose)
 	client.channel.NotifyPublish(client.notifyConfirm)
+}
+
+func (client *RabbitMqClient) handleInit() bool {
+	err := client.initialize()
+
+	if err != nil {
+		client.logger.Println("Failed to initialize: " + err.Error())
+		errors := []errorStruct{{code: "ParseHeadersError", description: err.Error()}}
+		sendResponse(
+			[]responseStruct{
+				{success: false,
+				errors: errors}
+			}
+		)
+		return false
+	}
+	select {
+	case <-client.done:
+		return true
+	case <-client.notifyConnClose:
+		client.logger.Println("Connection closed")
+		return false
+	case <-client.notifyChanClose:
+		client.logger.Println("Channel closed")
+		return false
+	}
+}
+
+func (client *RabbitMqClient) initialize() error {
+	ch, err := client.connection.Channel()
+	if err != nil {
+		return err
+	}
+	err := ch.Confirm(false)
+	if err != nil {
+		return err
+	}
+	_, err = ch.QueueDeclare(
+		client.settings.queueName,
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	client.changeChannel(ch)
+
+	return nil
+}
+
+func (client *RabbitMqClient) getMessages() {
+	//TODO :
+
+}
+
+func (client *RabbitMqClient) publishMessages(body io.ReadClose) {
+	//TODO
+}
+
+func (RabbitMqClient *RabbitMqClient) getConsumersSum() (int, error) {
+
+}
+
+func (RabbitMqClient *RabbitMqClient) getMessagesSum() (int, error) {
+
 }
 
 func (client *RabbitMqClient) Close() {
@@ -161,10 +222,10 @@ func (client *RabbitMqClient) Close() {
 	client.connection.Close()
 }
 
-func sendResponseRequest(data []responseStruct) {
+func sendResponse(data []responseStruct) {
 	jsonResponse, err := json.Marshal(data)
 	if err != nil {
-		putAnError(err, "ConvertToJsonProblem")
+		putAnError(err, "ConvertToJsonError")
 	}
 	resp, err := http.Post("", "application/json", bytes.NewBuffer(jsonResponse))
 
