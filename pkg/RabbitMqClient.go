@@ -25,6 +25,7 @@ type RabbitMqClient struct {
 	consumerCount   int
 	messageCount    int
 	logger          *log.Logger
+	isReady         bool
 }
 
 type connectionSettings struct {
@@ -48,14 +49,14 @@ type errorStruct struct {
 	description string
 }
 
-type publishMessage {
+type publishMessage struct {
 	headers string
 	message string
 }
 
 func putAnError(err error, msg string) {
 	if err != nil {
-		log.Println("%s: %s", msg, err)
+		log.Printf("%s: %s", msg, err)
 	}
 }
 
@@ -67,8 +68,8 @@ func NewClient(headers map[string][]string) (*RabbitMqClient, error) {
 		sendResponse(
 			[]responseStruct{
 				{success: false,
-				errors: errors}
-			}
+					errors: errors},
+			},
 		)
 		return nil, err
 	}
@@ -77,6 +78,7 @@ func NewClient(headers map[string][]string) (*RabbitMqClient, error) {
 		settings: settings,
 		logger:   log.New(os.Stdout, "RabbitMq_log", log.LstdFlags),
 		done:     make(chan bool),
+		isReady:  false,
 	}
 
 	go client.connect()
@@ -95,8 +97,10 @@ func (client *RabbitMqClient) connect() {
 	}
 
 	client.connection = connect
-	client.changeConnection(client.connection)
-	_:= client.handleInit()
+	go client.changeConnection(client.connection)
+	if initSuccessful := client.handleInit(); initSuccessful {
+		client.isReady = true
+	}
 }
 
 func parseSettings(headers map[string][]string) (*connectionSettings, error) {
@@ -155,8 +159,8 @@ func (client *RabbitMqClient) handleInit() bool {
 		sendResponse(
 			[]responseStruct{
 				{success: false,
-				errors: errors}
-			}
+					errors: errors},
+			},
 		)
 		return false
 	}
@@ -177,7 +181,7 @@ func (client *RabbitMqClient) initialize() error {
 	if err != nil {
 		return err
 	}
-	err := ch.Confirm(false)
+	err = ch.Confirm(false)
 	if err != nil {
 		return err
 	}
@@ -204,16 +208,16 @@ func (client *RabbitMqClient) getMessages() {
 
 }
 
-func (client *RabbitMqClient) publishMessages(body io.ReadClose) {
+func (client *RabbitMqClient) publishMessages(body io.ReadCloser) {
 	//TODO
 }
 
 func (RabbitMqClient *RabbitMqClient) getConsumersSum() (int, error) {
-
+	return 0, nil
 }
 
 func (RabbitMqClient *RabbitMqClient) getMessagesSum() (int, error) {
-
+	return 0, nil
 }
 
 func (client *RabbitMqClient) Close() {
