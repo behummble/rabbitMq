@@ -2,6 +2,7 @@ package rabbitmqClient
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -205,7 +208,57 @@ func (client *RabbitMqClient) initialize() error {
 
 func (client *RabbitMqClient) getMessages() {
 	//TODO :
+	timeOut, _ := strconv.ParseInt(client.settings.timeOut, 10, 32)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut))
 
+	if client.isReady {
+		deliveries, err := client.Consume()
+		if err != nil {
+			client.logger.Println("Failed to start consume: " + err.Error())
+			errors := []errorStruct{{code: "StartConsumeError", description: err.Error()}}
+			sendResponse(
+				[]responseStruct{
+					{success: false,
+						errors: errors},
+				},
+			)
+		}
+		chClosedCh := make(chan *amqp.Error, 1)
+		client.channel.NotifyClose(chClosedCh)
+		for {
+			select {
+			case <-ctx.Done():
+				client.Close()
+				return
+			case amqErr := <-chClosedCh:
+				client.logger.Println(amqErr)
+			}
+		}
+	}
+}
+
+func (client *RabbitMqClient) Consume() (<-chan amqp.Delivery, error) {
+	if !client.isReady {
+		return nil, errors.New("ClientIsNotReady")
+	}
+
+	if err := client.channel.Qos(
+		1,
+		0,
+		false,
+	); err != nil {
+		return nil, err
+	}
+
+	return client.channel.Consume(
+		client.settings.queueName,
+		"",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
 }
 
 func (client *RabbitMqClient) publishMessages(body io.ReadCloser) {
