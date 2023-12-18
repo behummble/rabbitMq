@@ -147,11 +147,12 @@ func parseSettings(headers map[string][]string) (*connectionSettings, error) {
 		}
 	}
 
-	if strings.EqualFold(host, "") ||
-		strings.EqualFold(vhost, "") ||
-		strings.EqualFold(login, "") ||
-		strings.EqualFold(password, "") ||
-		strings.EqualFold(queue, "") {
+	if  host == ""  ||
+		vhost == "" ||
+		login == "" ||
+		password == "" ||
+		queue == "" 
+	{
 		return nil, errors.New("TheNecessaryHeadersAreMissing")
 	}
 
@@ -307,12 +308,12 @@ func (client *RabbitMqClient) publishMessages(body io.ReadCloser) {
 	msgs := make(chan publishMessage)
 	defer close(msgs)
 
-	err := parseMessages(body, msgs)
+	go parseMessages(body, msgs)
 	if err != nil {
 		return
 	}
 	timeOut, _ := strconv.ParseInt(client.settings.timeOut, 10, 32)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut) + time.Second *5)
 	defer cancel()
 	if client.isReady {
 		for {
@@ -325,7 +326,7 @@ func (client *RabbitMqClient) publishMessages(body io.ReadCloser) {
 	}
 }
 
-func parseMessages(data io.ReadCloser, msgs chan publishMessage) error {
+func parseMessages(data io.ReadCloser, msgs chan publishMessage) {
 	body, err := io.ReadAll(data)
 	if err != nil {
 		putAnError(err, "ExcecuteMessageError")
