@@ -42,9 +42,26 @@ type connectionSettings struct {
 }
 
 type responseStruct struct {
-	success bool
-	errors  []errorStruct
-	msgId   string
+	success    bool
+	errors     []errorStruct
+	properties properties
+	headers    map[string]interface{}
+	body       []byte
+}
+
+type properties struct {
+	ContentType     string
+	ContentEncoding string
+	DeliveryMode    uint8
+	Priority        uint8
+	CorrelationId   string
+	ReplyTo         string
+	Expiration      string
+	MessageId       string
+	Timestamp       time.Time
+	Type            string
+	UserId          string
+	AppId           string
 }
 
 type errorStruct struct {
@@ -53,8 +70,9 @@ type errorStruct struct {
 }
 
 type publishMessage struct {
-	headers string
-	message string
+	headers    map[string]interface{}
+	properties properties
+	message    string
 }
 
 func putAnError(err error, msg string) {
@@ -210,7 +228,7 @@ func (client *RabbitMqClient) getMessages() {
 	//TODO :
 	timeOut, _ := strconv.ParseInt(client.settings.timeOut, 10, 32)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut))
-
+	defer cancel()
 	if client.isReady {
 		deliveries, err := client.Consume()
 		if err != nil {
@@ -218,8 +236,10 @@ func (client *RabbitMqClient) getMessages() {
 			errors := []errorStruct{{code: "StartConsumeError", description: err.Error()}}
 			sendResponse(
 				[]responseStruct{
-					{success: false,
-						errors: errors},
+					{
+						success: false,
+						errors:  errors,
+					},
 				},
 			)
 		}
@@ -232,6 +252,27 @@ func (client *RabbitMqClient) getMessages() {
 				return
 			case amqErr := <-chClosedCh:
 				client.logger.Println(amqErr)
+			case delivery := <-deliveries:
+				properties := getProperties(&delivery)
+				isAck := sendResponse(
+					[]responseStruct{
+						{
+							success:    true,
+							properties: properties,
+							headers:    delivery.Headers,
+							body:       delivery.Body,
+						},
+					},
+				)
+				if isAck {
+					if err := delivery.Ack(false); err != nil {
+						client.logger.Println(err)
+					}
+				} else {
+					if err := delivery.Reject(true); err != nil {
+						client.logger.Println(err)
+					}
+				}
 			}
 		}
 	}
@@ -263,6 +304,39 @@ func (client *RabbitMqClient) Consume() (<-chan amqp.Delivery, error) {
 
 func (client *RabbitMqClient) publishMessages(body io.ReadCloser) {
 	//TODO
+	msgs := make(chan publishMessage)
+	defer close(msgs)
+
+	err := parseMessages(body, msgs)
+	if err != nil {
+		return
+	}
+	timeOut, _ := strconv.ParseInt(client.settings.timeOut, 10, 32)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut))
+	defer cancel()
+	if client.isReady {
+		for {
+			select {
+			case msg := <-msgs:
+
+			case <-ctx.Done():
+			}
+		}
+	}
+}
+
+func parseMessages(data io.ReadCloser, msgs chan publishMessage) error {
+	body, err := io.ReadAll(data)
+	if err != nil {
+		putAnError(err, "ExcecuteMessageError")
+		return err
+	}
+	var publishMessages []publishMessage
+	json.Unmarshal(body, &publishMessages)
+	for _, msg := range publishMessages {
+		msgs <- msg
+	}
+	return nil
 }
 
 func (RabbitMqClient *RabbitMqClient) getConsumersSum() (int, error) {
@@ -279,15 +353,17 @@ func (client *RabbitMqClient) Close() {
 	client.connection.Close()
 }
 
-func sendResponse(data []responseStruct) {
+func sendResponse(data []responseStruct) bool {
 	jsonResponse, err := json.Marshal(data)
 	if err != nil {
 		putAnError(err, "ConvertToJsonError")
+		return false
 	}
 	resp, err := http.Post("", "application/json", bytes.NewBuffer(jsonResponse))
 
 	if err != nil {
 		putAnError(err, "ResponseSendingError")
+		return false
 	}
 
 	defer resp.Body.Close()
@@ -295,5 +371,24 @@ func sendResponse(data []responseStruct) {
 	if resp.StatusCode != 200 {
 		answer, _ := io.ReadAll(resp.Body)
 		putAnError(errors.New(string(answer)), "ResponseAnswerError")
+		return false
+	}
+	return true
+}
+
+func getProperties(delivery *amqp.Delivery) properties {
+	return properties{
+		ContentType:     delivery.ContentType,
+		ContentEncoding: delivery.ContentEncoding,
+		DeliveryMode:    delivery.DeliveryMode,
+		Priority:        delivery.Priority,
+		CorrelationId:   delivery.CorrelationId,
+		ReplyTo:         delivery.ReplyTo,
+		Expiration:      delivery.Expiration,
+		MessageId:       delivery.MessageId,
+		Timestamp:       delivery.Timestamp,
+		Type:            delivery.Type,
+		UserId:          delivery.UserId,
+		AppId:           delivery.AppId,
 	}
 }

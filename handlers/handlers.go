@@ -3,17 +3,16 @@ package handlers
 import (
 	"log"
 	"net/http"
-	"strings"
 )
 
 func RabbitMq_1C(writter http.ResponseWriter, request *http.Request) {
 
-	if !strings.EqualFold(request.Method, "GET") || !strings.EqualFold(request.Method != "POST") {
+	if request.Method != http.MethodGet || request.Method != http.MethodPost {
 		log.Fatal("Method declared in request isn't supported")
 	} else {
-		rabbitmqClient, err = rabbitmqClient.NewClient();
+		rabbitmqClient, err := rabbitmqClient.NewClient()
 		if err == nil {
-			if strings.EqualFold(request.Method, "GET") {
+			if request.Method == http.MethodGet {
 				rabbitmqClient.getMessages()
 			} else {
 				rabbitmqClient.publishMessages(request.Body)
