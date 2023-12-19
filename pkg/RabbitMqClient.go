@@ -147,12 +147,11 @@ func parseSettings(headers map[string][]string) (*connectionSettings, error) {
 		}
 	}
 
-	if  host == ""  ||
+	if host == "" ||
 		vhost == "" ||
 		login == "" ||
 		password == "" ||
-		queue == "" 
-	{
+		queue == "" {
 		return nil, errors.New("TheNecessaryHeadersAreMissing")
 	}
 
@@ -307,22 +306,82 @@ func (client *RabbitMqClient) publishMessages(body io.ReadCloser) {
 	//TODO
 	msgs := make(chan publishMessage)
 	defer close(msgs)
+	var confirmedMessages []string
 
 	go parseMessages(body, msgs)
-	if err != nil {
-		return
-	}
+
 	timeOut, _ := strconv.ParseInt(client.settings.timeOut, 10, 32)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut) + time.Second *5)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut)+time.Second*5)
 	defer cancel()
 	if client.isReady {
 		for {
 			select {
 			case msg := <-msgs:
+				err := client.pushMessage(msg)
+				if err != nil {
+					client.logger.Println(err)
+				} else {
+					confirm := <-client.notifyConfirm
+					if confirm.Ack {
+						//	confirmedMessages = append(confirmedMessages, msg.headers["messageId"])
+					}
+				}
 
 			case <-ctx.Done():
+				break
+			case <-client.done:
+				break
 			}
 		}
+		/*sendResponse(
+			[]responseStruct{
+				{
+					success: true,
+					//body: []byte,
+				},
+			},
+		) */
+	}
+}
+
+func (client *RabbitMqClient) pushMessage(msg publishMessage) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	amqpMsg := getAmqpMsg(msg)
+	return client.channel.PublishWithContext(
+		ctx,
+		"default",
+		client.settings.queueName,
+		false,
+		false,
+		amqpMsg,
+	)
+}
+
+func getAmqpMsg(msg publishMessage) amqp.Publishing {
+
+	/*	table := amqp.NewConnectionProperties()
+		for k,v := range msg.headers {
+			table[k] = v
+		}
+	*/
+	return amqp.Publishing{
+		Headers: msg.headers,
+
+		ContentType:     msg.properties.ContentType,
+		ContentEncoding: msg.properties.ContentEncoding,
+		DeliveryMode:    msg.properties.DeliveryMode,
+		Priority:        msg.properties.Priority,
+		CorrelationId:   msg.properties.CorrelationId,
+		ReplyTo:         msg.properties.ReplyTo,
+		Expiration:      msg.properties.Expiration,
+		MessageId:       msg.properties.MessageId,
+		Timestamp:       msg.properties.Timestamp,
+		Type:            msg.properties.Type,
+		UserId:          msg.properties.UserId,
+		AppId:           msg.properties.AppId,
+
+		Body: []byte(msg.message),
 	}
 }
 
@@ -330,14 +389,13 @@ func parseMessages(data io.ReadCloser, msgs chan publishMessage) {
 	body, err := io.ReadAll(data)
 	if err != nil {
 		putAnError(err, "ExcecuteMessageError")
-		return err
+		return
 	}
 	var publishMessages []publishMessage
 	json.Unmarshal(body, &publishMessages)
 	for _, msg := range publishMessages {
 		msgs <- msg
 	}
-	return nil
 }
 
 func (RabbitMqClient *RabbitMqClient) getConsumersSum() (int, error) {
