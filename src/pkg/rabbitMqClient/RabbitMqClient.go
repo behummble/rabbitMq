@@ -116,10 +116,10 @@ func (client *RabbitMqClient) handleInit() error {
 		return nil
 	case <-client.notifyConnClose:
 		client.logger.Println("Connection with the server was closed")
-		return errors.New("Connection with the server was closed")
+		return errors.New("connection with the server was closed")
 	case <-client.notifyChanClose:
 		client.logger.Println("The channel that works with messages has been closed")
-		return errors.New("The channel that works with messages has been closed")
+		return errors.New("the channel that works with messages has been closed")
 	}
 }
 
@@ -174,7 +174,7 @@ func (client *RabbitMqClient) GetMessages() *ErrorStruct {
 				client.logger.Println(amqErr)
 				return &ErrorStruct{Code: "ChannelClosed", Description: amqErr.Error()}
 			case delivery := <-deliveries:
-				properties := utils.GetProperties(&delivery)
+				/*properties := utils.GetProperties(&delivery)
 				isAck := sendResponse(
 					responseStruct{
 						success:    true,
@@ -182,7 +182,8 @@ func (client *RabbitMqClient) GetMessages() *ErrorStruct {
 						headers:    delivery.Headers,
 						body:       delivery.Body,
 					},
-				)
+				) */
+				isAck := true
 				if isAck {
 					if err := delivery.Ack(false); err != nil {
 						client.logger.Println(err)
@@ -238,6 +239,7 @@ func (client *RabbitMqClient) PublishMessages(body io.ReadCloser) (*[]string, er
 	defer cancel()
 
 	if client.isReady {
+	loop:
 		for {
 			select {
 			case msg := <-msgs:
@@ -252,17 +254,17 @@ func (client *RabbitMqClient) PublishMessages(body io.ReadCloser) (*[]string, er
 				}
 
 			case <-ctx.Done():
-				break
+				break loop
 			case <-client.done:
-				break
+				break loop
 			}
 		}
 	} else {
-		client.logger.Println(errors.New("Attemp to build RMQ-client was unsuccessful"))
+		client.logger.Println(errors.New("attemp to build RMQ-client was unsuccessful"))
 	}
 
 	if len(confirmedMessages) == 0 {
-		return nil, errors.New("Something go wrong, check the logs")
+		return nil, errors.New("something go wrong, check the logs")
 	}
 
 	return &confirmedMessages, nil
