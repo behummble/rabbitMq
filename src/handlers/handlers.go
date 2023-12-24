@@ -1,0 +1,60 @@
+package handlers
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+
+	"github.com/behummble/rabbitMq/src/pkg/rabbitMqClient"
+	"github.com/gorilla/mux"
+)
+
+func RabbitMq_1C(writer http.ResponseWriter, request *http.Request) {
+
+	rabbitmqClient, err := rabbitMqClient.NewClient(request.Header)
+
+	if err != nil {
+
+		log.Fatal(err)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadGateway)
+		body, _ := json.Marshal(err)
+		writer.Write(body)
+
+	} else {
+
+		if request.Method == http.MethodGet {
+			errorStruct := rabbitmqClient.GetMessages()
+			if errorStruct != nil {
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(http.StatusBadRequest)
+				body, _ := json.Marshal(errorStruct)
+				writer.Write(body)
+			}
+		} else {
+			confirmedMessages, err := rabbitmqClient.PublishMessages(request.Body)
+			writer.Header().Set("Content-Type", "application/json")
+			if err != nil {
+				writer.WriteHeader(http.StatusBadRequest)
+			} else {
+				writer.WriteHeader(http.StatusAccepted)
+				body, _ := json.Marshal(confirmedMessages)
+				writer.Write(body)
+			}
+
+		}
+
+	}
+}
+
+func referenceData(writter http.ResponseWriter, request *http.Request) {
+
+}
+
+func StartHandlers() {
+	router := mux.NewRouter()
+	router.HandleFunc("/rabbitmq_1C/api/queues/messages", RabbitMq_1C).Methods("GET", "POST")
+	router.HandleFunc("/rabbitmq_1C/api/queues/referenceData", referenceData).Methods("GET")
+	http.Handle("/", router)
+	log.Fatal(http.ListenAndServe("localhost:9000", router))
+}
