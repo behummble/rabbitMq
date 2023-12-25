@@ -55,7 +55,7 @@ func ParseSettings(headers map[string][]string) (*ConnectionSettings, error) {
 
 	for k, v := range headers {
 		switch strings.ToLower(k) {
-		case "host":
+		case "rabbithost":
 			host = v[0]
 		case "login":
 			login = v[0]

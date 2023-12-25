@@ -15,11 +15,11 @@ func RabbitMq_1C(writer http.ResponseWriter, request *http.Request) {
 
 	if err != nil {
 
-		log.Fatal(err)
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusBadGateway)
 		body, _ := json.Marshal(err)
 		writer.Write(body)
+		//	log.Fatal(err)
 
 	} else {
 
