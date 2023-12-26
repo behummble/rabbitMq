@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/behummble/rabbitMq/src/pkg/utils"
@@ -29,6 +30,7 @@ type RabbitMqClient struct {
 	messageCount    int
 	logger          *log.Logger
 	isReady         bool
+	waitGroup       *sync.WaitGroup
 }
 
 type responseStruct struct {
@@ -58,12 +60,13 @@ func NewClient(headers map[string][]string) (*RabbitMqClient, *ErrorStruct) {
 	}
 
 	client := RabbitMqClient{
-		settings: settings,
-		logger:   log.New(os.Stdout, "RabbitMq_log", log.LstdFlags),
-		done:     make(chan bool),
-		isReady:  false,
+		settings:  settings,
+		logger:    log.New(os.Stdout, "RabbitMq_log", log.LstdFlags),
+		done:      make(chan bool),
+		isReady:   false,
+		waitGroup: &sync.WaitGroup{},
 	}
-
+	client.waitGroup.Add(1)
 	go client.connect()
 	return &client, nil
 }
@@ -82,7 +85,10 @@ func (client *RabbitMqClient) connect() {
 		client.logger.Println(err)
 	}
 
+	defer client.waitGroup.Done()
+
 	client.connection = connect
+	client.waitGroup.Add(1)
 	go client.changeConnection(client.connection)
 
 	if err := client.handleInit(); err == nil {
@@ -93,6 +99,7 @@ func (client *RabbitMqClient) connect() {
 func (client *RabbitMqClient) changeConnection(connect *amqp.Connection) {
 	client.notifyConnClose = make(chan *amqp.Error, 1)
 	client.connection.NotifyClose(client.notifyConnClose)
+	defer client.waitGroup.Done()
 }
 
 func (client *RabbitMqClient) changeChannel(channel *amqp.Channel) {
@@ -101,6 +108,7 @@ func (client *RabbitMqClient) changeChannel(channel *amqp.Channel) {
 	client.notifyConfirm = make(chan amqp.Confirmation, 1)
 	client.channel.NotifyClose(client.notifyConnClose)
 	client.channel.NotifyPublish(client.notifyConfirm)
+	defer client.waitGroup.Done()
 }
 
 func (client *RabbitMqClient) handleInit() error {
@@ -110,8 +118,8 @@ func (client *RabbitMqClient) handleInit() error {
 		client.logger.Println("Failed to initialize: " + err.Error())
 		return err
 	}
-
-	select {
+	return nil
+	/*select {
 	case <-client.done:
 		return nil
 	case <-client.notifyConnClose:
@@ -120,7 +128,7 @@ func (client *RabbitMqClient) handleInit() error {
 	case <-client.notifyChanClose:
 		client.logger.Println("The channel that works with messages has been closed")
 		return errors.New("the channel that works with messages has been closed")
-	}
+	} */
 }
 
 func (client *RabbitMqClient) initialize() error {
@@ -136,7 +144,7 @@ func (client *RabbitMqClient) initialize() error {
 
 	_, err = ch.QueueDeclare(
 		client.settings.QueueName,
-		false,
+		true,
 		false,
 		false,
 		false,
@@ -147,7 +155,8 @@ func (client *RabbitMqClient) initialize() error {
 		return err
 	}
 
-	client.changeChannel(ch)
+	client.waitGroup.Add(1)
+	go client.changeChannel(ch)
 
 	return nil
 }
@@ -156,7 +165,8 @@ func (client *RabbitMqClient) GetMessages() *ErrorStruct {
 	timeOut, _ := strconv.ParseInt(client.settings.TimeOut, 10, 32)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut))
 	defer cancel()
-
+	defer client.Close()
+	client.waitGroup.Wait()
 	if client.isReady {
 		deliveries, err := client.consume()
 		if err != nil {
@@ -168,7 +178,6 @@ func (client *RabbitMqClient) GetMessages() *ErrorStruct {
 		for {
 			select {
 			case <-ctx.Done():
-				client.Close()
 				return &ErrorStruct{Code: "TimeOutError", Description: "Timeout error"}
 			case amqErr := <-chClosedCh:
 				client.logger.Println(amqErr)
@@ -238,6 +247,8 @@ func (client *RabbitMqClient) PublishMessages(body io.ReadCloser) (*[]string, er
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut)+time.Second*5)
 	defer cancel()
 
+	client.waitGroup.Wait()
+
 	if client.isReady {
 	loop:
 		for {
@@ -267,6 +278,8 @@ func (client *RabbitMqClient) PublishMessages(body io.ReadCloser) (*[]string, er
 		return nil, errors.New("something go wrong, check the logs")
 	}
 
+	defer client.Close()
+
 	return &confirmedMessages, nil
 }
 
@@ -276,7 +289,7 @@ func (client *RabbitMqClient) pushMessage(msg *utils.PublishMessage) error {
 	amqpMsg := utils.GetAmqpMsg(msg)
 	return client.channel.PublishWithContext(
 		ctx,
-		"default",
+		amqp.DefaultExchange,
 		client.settings.QueueName,
 		false,
 		false,
@@ -294,8 +307,12 @@ func (RabbitMqClient *RabbitMqClient) getMessagesSum() (int, error) {
 
 func (client *RabbitMqClient) Close() {
 	close(client.done)
-	client.channel.Close()
-	client.connection.Close()
+	if client.channel != nil {
+		client.channel.Close()
+	}
+	if client.connection != nil {
+		client.connection.Close()
+	}
 }
 
 func sendResponse(data ...responseStruct) bool {

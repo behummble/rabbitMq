@@ -39,7 +39,7 @@ type Properties struct {
 type PublishMessage struct {
 	Headers    map[string]interface{}
 	properties Properties
-	message    string
+	Message    string
 }
 
 func putAnError(err error, msg string) {
@@ -131,6 +131,6 @@ func GetAmqpMsg(msg *PublishMessage) amqp.Publishing {
 		UserId:          msg.properties.UserId,
 		AppId:           msg.properties.AppId,
 
-		Body: []byte(msg.message),
+		Body: []byte(msg.Message),
 	}
 }

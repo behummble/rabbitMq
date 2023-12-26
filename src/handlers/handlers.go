@@ -19,7 +19,7 @@ func RabbitMq_1C(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusBadGateway)
 		body, _ := json.Marshal(err)
 		writer.Write(body)
-		//	log.Fatal(err)
+		//log.Println(err)
 
 	} else {
 
