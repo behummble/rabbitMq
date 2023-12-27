@@ -106,7 +106,7 @@ func (client *RabbitMqClient) changeChannel(channel *amqp.Channel) {
 	client.channel = channel
 	client.notifyChanClose = make(chan *amqp.Error, 1)
 	client.notifyConfirm = make(chan amqp.Confirmation, 1)
-	client.channel.NotifyClose(client.notifyConnClose)
+	client.channel.NotifyClose(client.notifyChanClose)
 	client.channel.NotifyPublish(client.notifyConfirm)
 	defer client.waitGroup.Done()
 }
@@ -161,27 +161,32 @@ func (client *RabbitMqClient) initialize() error {
 	return nil
 }
 
-func (client *RabbitMqClient) GetMessages() *ErrorStruct {
+func (client *RabbitMqClient) GetMessages() (*[]*amqp.Delivery, *ErrorStruct) {
 	timeOut, _ := strconv.ParseInt(client.settings.TimeOut, 10, 32)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeOut))
 	defer cancel()
 	defer client.Close()
+
+	var amqpMessages []*amqp.Delivery
 	client.waitGroup.Wait()
 	if client.isReady {
 		deliveries, err := client.consume()
 		if err != nil {
 			client.logger.Println("Failed to start consume: " + err.Error())
-			return &ErrorStruct{Code: "StartConsumeError", Description: err.Error()}
+			//	return nil, &ErrorStruct{Code: "StartConsumeError", Description: err.Error()}
 		}
 		chClosedCh := make(chan *amqp.Error, 1)
 		client.channel.NotifyClose(chClosedCh)
+	loop:
 		for {
 			select {
 			case <-ctx.Done():
-				return &ErrorStruct{Code: "TimeOutError", Description: "Timeout error"}
+				//return nil, &ErrorStruct{Code: "TimeOutError", Description: "Timeout error"}
+				break loop
 			case amqErr := <-chClosedCh:
 				client.logger.Println(amqErr)
-				return &ErrorStruct{Code: "ChannelClosed", Description: amqErr.Error()}
+				//return nil, &ErrorStruct{Code: "ChannelClosed", Description: amqErr.Error()}
+				break loop
 			case delivery := <-deliveries:
 				/*properties := utils.GetProperties(&delivery)
 				isAck := sendResponse(
@@ -196,19 +201,32 @@ func (client *RabbitMqClient) GetMessages() *ErrorStruct {
 				if isAck {
 					if err := delivery.Ack(false); err != nil {
 						client.logger.Println(err)
-						return &ErrorStruct{Code: "MessageAckError", Description: err.Error()}
+						//	return nil, &ErrorStruct{Code: "MessageAckError", Description: err.Error()}
+					} else {
+						amqpMessages = append(amqpMessages, &delivery)
 					}
 				} else {
 					if err := delivery.Reject(true); err != nil {
 						client.logger.Println(err)
-						return &ErrorStruct{Code: "MessageRejectError", Description: err.Error()}
+						//	return nil, &ErrorStruct{Code: "MessageRejectError", Description: err.Error()}
 					}
 				}
 			}
 		}
+		if len(amqpMessages) == 0 {
+			return nil, &ErrorStruct{Code: "UnknownError", Description: "something go wrong, check the logs"}
+		} else {
+			return &amqpMessages, nil
+		}
 	} else {
-		return &ErrorStruct{Code: "ClientBuildError", Description: "Attemp to build RMQ-client was unsuccessful"}
+		return nil, &ErrorStruct{Code: "ClientBuildError", Description: "Attemp to build RMQ-client was unsuccessful"}
 	}
+
+	//if len(amqpMessages) == 0 {
+	//	return nil, &ErrorStruct{Code: "UnknownError", Description: "something go wrong, check the logs"}
+	//} else {
+	//return &amqpMessages, nil
+	//}
 }
 
 func (client *RabbitMqClient) consume() (<-chan amqp.Delivery, error) {
@@ -265,8 +283,10 @@ func (client *RabbitMqClient) PublishMessages(body io.ReadCloser) (*[]string, er
 				}
 
 			case <-ctx.Done():
+				//	client.Close()
 				break loop
 			case <-client.done:
+				//client.Close()
 				break loop
 			}
 		}
@@ -307,11 +327,13 @@ func (RabbitMqClient *RabbitMqClient) getMessagesSum() (int, error) {
 
 func (client *RabbitMqClient) Close() {
 	close(client.done)
-	if client.channel != nil {
-		client.channel.Close()
-	}
-	if client.connection != nil {
+
+	if client.connection != nil && !client.connection.IsClosed() {
 		client.connection.Close()
+	}
+
+	if client.channel != nil && !client.channel.IsClosed() {
+		client.channel.Close()
 	}
 }
 

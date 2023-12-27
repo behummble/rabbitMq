@@ -24,11 +24,15 @@ func RabbitMq_1C(writer http.ResponseWriter, request *http.Request) {
 	} else {
 
 		if request.Method == http.MethodGet {
-			errorStruct := rabbitmqClient.GetMessages()
+			msgs, errorStruct := rabbitmqClient.GetMessages()
+			writer.Header().Set("Content-Type", "application/json")
 			if errorStruct != nil {
-				writer.Header().Set("Content-Type", "application/json")
 				writer.WriteHeader(http.StatusBadRequest)
 				body, _ := json.Marshal(errorStruct)
+				writer.Write(body)
+			} else {
+				writer.WriteHeader(http.StatusAccepted)
+				body, _ := json.Marshal(msgs)
 				writer.Write(body)
 			}
 		} else {
